@@ -135,16 +135,37 @@ function buildDemo() {
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
-// The API's flight list is not always a plain array, so look for it in the likely places.
+// The API nests its flight list in different places, so search the whole response for it:
+// the biggest array whose items have a price and a legs list.
 function findItineraries(json) {
-  const d = json?.data ?? json;
-  const cands = [d?.itineraries, d?.itineraries?.results, d?.itineraries?.itineraries, d?.results, json?.itineraries, d];
-  for (const c of cands) if (Array.isArray(c)) return c;
-  const obj = d?.itineraries && typeof d.itineraries === 'object' ? d.itineraries : d;
-  if (obj && typeof obj === 'object') {
-    for (const v of Object.values(obj)) if (Array.isArray(v) && v.length && v[0]?.price) return v;
-  }
-  return [];
+  const seen = new Set();
+  let best = null;
+  (function walk(node, depth) {
+    if (!node || typeof node !== 'object' || depth > 6 || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node) && node.length && node[0] && typeof node[0] === 'object' && node[0].price && Array.isArray(node[0].legs)) {
+      if (!best || node.length > best.length) best = node;
+      return;
+    }
+    for (const v of Object.values(node)) walk(v, depth + 1);
+  })(json, 0);
+  return best || [];
+}
+
+// Short description of the arrays in a response, used only in error messages.
+function describeArrays(json) {
+  const out = [], seen = new Set();
+  (function walk(node, path, depth) {
+    if (!node || typeof node !== 'object' || depth > 4 || seen.has(node) || out.length >= 6) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      const first = node[0];
+      out.push(`${path || 'root'}[${node.length}]` + (first && typeof first === 'object' ? ' items have: ' + Object.keys(first).slice(0, 8).join('/') : ''));
+      return;
+    }
+    for (const [k, v] of Object.entries(node)) walk(v, (path ? path + '.' : '') + k, depth + 1);
+  })(json, '', 0);
+  return out.join('; ');
 }
 
 function normalize(json) {
@@ -247,8 +268,7 @@ async function liveSearch(from, to, date) {
     throw new Error(`HTTP ${res.status}` + (res.status === 429 ? ' rate limit or quota reached' : (json.message ? ': ' + json.message : '')));
   }
   if (!normalize(json).length) {
-    const it = json?.data?.itineraries;
-    throw new Error('no flights found in the response (data keys: ' + Object.keys(json?.data || {}).join(', ') + '; itineraries is ' + (Array.isArray(it) ? 'an empty array' : typeof it) + ')');
+    throw new Error('no flights found in the response. Arrays found: ' + (describeArrays(json) || 'none'));
   }
   return json;
 }
