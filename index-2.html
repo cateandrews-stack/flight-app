@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flight Decision Tool</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --fg:#14213d; --muted:#5b6578; --line:#d9dde5; --accent:#0b5fff; --good:#12805c; --warn:#b45309; --bad:#b42318; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:24px 16px 48px; }
+  main { max-width: 980px; margin: 0 auto; display:grid; gap:16px; }
+  h1 { font-size:22px; margin:0; } h2 { font-size:16px; margin:0 0 10px; }
+  p.sub { margin:4px 0 0; color:var(--muted); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  form { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  label { display:grid; gap:4px; font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  input, select { font:inherit; padding:8px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--fg); min-width:0; }
+  .wide { grid-column:1/-1; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  button { font:inherit; font-weight:600; padding:9px 16px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button.alt { background:#fff; color:var(--accent); }
+  button:disabled { opacity:.6; cursor:wait; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:3px solid #9ec0ff; outline-offset:1px; }
+  #status { font-weight:600; } .ok{color:var(--good)} .err{color:var(--bad)} .info{color:var(--warn)}
+  .banner { padding:10px 12px; border-radius:6px; margin-bottom:12px; background:#fff7ed; border:1px solid #fdba74; color:#7c2d12; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:14px; }
+  .kpi { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .kpi small { display:block; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .kpi strong { font-size:22px; }
+  .tbl { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; min-width:640px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  tr.top td { background:#eef4ff; font-weight:600; }
+  .explain { margin-top:12px; padding:10px 12px; border-left:4px solid var(--accent); background:#eef4ff; }
+  .note { margin-top:8px; font-size:13px; color:var(--muted); }
+  details pre { overflow:auto; max-height:260px; background:#0f172a; color:#e2e8f0; padding:12px; border-radius:6px; font-size:12px; }
+  .transparency { background:#f1f3f6; border:1px solid var(--line); }
+  ul.model { margin:0; padding-left:18px; }
+  ul.model li { margin-bottom:6px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Flight Decision Tool</h1>
+    <p class="sub">Enter a trip, pull live flights from the Flights Scraper Sky API, and rank them by your price-vs-convenience preference.</p>
+  </header>
+
+  <section class="card">
+    <h2>1. Input</h2>
+    <form id="f">
+      <label>Origin airport<input id="origin" value="LAX" maxlength="4" required></label>
+      <label>Destination airport<input id="dest" value="JFK" maxlength="4" required></label>
+      <label>Departure date<input id="date" type="date" value="2026-12-20" required></label>
+      <label>Max budget ($)<input id="budget" type="number" min="0" value="1500"></label>
+      <label>Max stops<select id="maxstops"><option value="0">Nonstop only</option><option value="1" selected>Up to 1</option><option value="2">Up to 2</option><option value="9">Any</option></select></label>
+      <label class="wide">Price importance: <span id="wv">5</span> / 10 <span style="text-transform:none;letter-spacing:0;font-weight:400">(0 = convenience only, 10 = price only)</span>
+        <input id="w" type="range" min="0" max="10" value="5"></label>
+      <div class="row wide">
+        <button type="submit" id="go">Search flights</button>
+        <button type="button" class="alt" id="sample">Load saved demo data</button>
+        <span id="status" role="status"></span>
+      </div>
+      <details class="wide">
+        <summary>Advanced: use my own RapidAPI key (only needed if the server function is not set up)</summary>
+        <label style="margin-top:8px">RapidAPI key (kept in this tab, sent only to rapidapi.com)
+          <input id="key" type="password" placeholder="X-RapidAPI-Key" autocomplete="off"></label>
+      </details>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>2. API call</h2>
+    <div id="req" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all;color:var(--muted)">No call made yet.</div>
+    <details style="margin-top:10px"><summary>Raw JSON response</summary><pre id="raw">(empty)</pre></details>
+  </section>
+
+  <section class="card">
+    <h2>3. Results and KPIs</h2>
+    <div id="banner" class="banner" hidden></div>
+    <div class="kpis">
+      <div class="kpi"><small>Cheapest fare</small><strong id="k-cheap">-</strong></div>
+      <div class="kpi"><small>Fastest trip</small><strong id="k-fast">-</strong></div>
+      <div class="kpi"><small>Avg cost per hour</small><strong id="k-cph">-</strong></div>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>#</th><th>Airline</th><th>Price</th><th>Stops</th><th>Duration</th><th>$ / hour</th><th>Price score</th><th>Time score</th><th>Stops score</th><th>Overall</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="10" style="color:var(--muted)">Run a search to see the top 3 flights.</td></tr></tbody>
+    </table></div>
+    <div class="note" id="count"></div>
+    <div class="explain" id="explain" hidden></div>
+  </section>
+
+  <section class="card transparency">
+    <h2>Model Transparency</h2>
+    <ul class="model">
+      <li><strong>Assumption:</strong> The score only considers price, total travel time, and number of stops, and it assumes your slider setting reflects what matters most to you.</li>
+      <li><strong>Limitation:</strong> Flight data comes from a single API search, so prices and availability can change. Scores are relative to the flights returned, not every flight that exists.</li>
+      <li><strong>What it does NOT mean:</strong> A high score does not mean this is the best flight for everyone. The app does not account for baggage fees, airline quality, layover airports, or departure times.</li>
+      <li><strong>What it does mean:</strong> The recommendation is a decision aid that ranks the options shown based on your preferences. It does not book flights or guarantee the listed price.</li>
+    </ul>
+    <p class="note">Formula: Overall = Price weight x Price score + Time weight x Time score + Stops weight x Stops score. Price weight = slider / 10; Time weight = 60% of the remaining weight; Stops weight = 40% of the remaining weight. Stops score: nonstop 100, 1 stop 60, 2+ stops 20.</p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const DIRECT_HOST = 'flights-sky.p.rapidapi.com';
+let lastData = null;
+let usingDemo = false;
+let demoReason = '';
+
+// Saved real response (trimmed) from RapidAPI's own Run button: Flights Scraper Sky, flights/search-one-way, Paris to New Orleans.
+// Rows: [airline, price, minutes, stops, from, to]
+const DEMO_ROWS = [
+  ['French Bee', 600, 760, 1, 'ORY', 'MSY'],
+  ['easyJet', 436, 1101, 2, 'CDG', 'MSY'],
+  ['easyJet', 418, 1246, 2, 'CDG', 'MSY'],
+  ['Norse Atlantic Airways', 640.07, 934, 1, 'CDG', 'MSY'],
+  ['Air France', 723, 1091, 2, 'CDG', 'MSY'],
+  ['French Bee', 1083.8, 894, 1, 'ORY', 'MSY'],
+  ['Brussels Airlines', 1461.1, 844, 1, 'CDG', 'MSY'],
+  ['Lufthansa', 1448.19, 844, 1, 'CDG', 'MSY'],
+  ['United', 1461.1, 844, 1, 'CDG', 'MSY'],
+  ['Lufthansa', 1442.63, 939, 2, 'CDG', 'MSY']
+];
+function buildDemo() {
+  return { data: { context: { status: 'complete' }, itineraries: DEMO_ROWS.map(([airline, price, minutes, stops, from, to], i) => ({
+    id: 'demo-' + i,
+    price: { raw: price, formatted: '$' + Math.round(price) },
+    legs: [{ origin: { displayCode: from }, destination: { displayCode: to }, durationInMinutes: minutes, stopCount: stops, carriers: { marketing: [{ name: airline }] } }]
+  })) }, status: true, message: 'Saved demo response' };
+}
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+function normalize(json) {
+  const list = json?.data?.itineraries || json?.itineraries || [];
+  return list.map(it => {
+    const leg = it.legs?.[0] || {};
+    return {
+      airline: leg.carriers?.marketing?.[0]?.name || leg.carriers?.operating?.[0]?.name || 'Unknown',
+      price: Number(it.price?.raw ?? it.price?.amount ?? NaN),
+      minutes: Number(leg.durationInMinutes ?? NaN),
+      stops: Number(leg.stopCount ?? 0)
+    };
+  }).filter(f => Number.isFinite(f.price) && Number.isFinite(f.minutes) && f.minutes > 0);
+}
+
+// Scoring follows the Checkpoint 3 decision logic.
+function rank(flights, w10, budget, maxStops) {
+  const pool = flights.filter(f => f.price <= budget && f.stops <= maxStops);
+  if (!pool.length) return [];
+  const lowIsBest = (arr, v) => { const lo = Math.min(...arr), hi = Math.max(...arr); return hi === lo ? 100 : 100 * (hi - v) / (hi - lo); };
+  const stopsScore = s => s === 0 ? 100 : s === 1 ? 60 : 20;
+  const prices = pool.map(f => f.price), times = pool.map(f => f.minutes);
+  const wp = w10 / 10, wt = 0.6 * (1 - wp), ws = 0.4 * (1 - wp);
+  return pool.map(f => {
+    const ps = lowIsBest(prices, f.price), ts = lowIsBest(times, f.minutes), ss = stopsScore(f.stops);
+    return { ...f, perHour: f.price / (f.minutes / 60), ps, ts, ss, overall: wp * ps + wt * ts + ws * ss };
+  }).sort((a, b) => b.overall - a.overall);
+}
+
+const dur = m => `${Math.floor(m / 60)} hr ${m % 60} min`;
+const stopsTxt = s => s === 0 ? 'Nonstop' : s + (s === 1 ? ' stop' : ' stops');
+
+function showBanner() {
+  const parts = [];
+  if (usingDemo) parts.push(demoReason || 'Showing saved demo data, not a live search.');
+  else if (lastData?.data?.context?.status && lastData.data.context.status !== 'complete') {
+    parts.push('The API marked this search as incomplete, so the list of flights may be partial.');
+  }
+  parts.push('Flight prices and availability can change after the search. Verify the final price and itinerary with the airline before booking.');
+  const b = $('banner'); b.hidden = false; b.textContent = parts.join(' ');
+}
+
+function render() {
+  if (!lastData) return;
+  const w = +$('w').value, budget = +$('budget').value || Infinity, maxStops = +$('maxstops').value;
+  const all = normalize(lastData), ranked = rank(all, w, budget, maxStops);
+  showBanner();
+  const tb = $('rows');
+  if (!ranked.length) {
+    tb.innerHTML = `<tr><td colspan="10" class="err">${all.length} flights returned, none within your budget and stops limit. Raise the budget or allow more stops.</td></tr>`;
+    ['k-cheap', 'k-fast', 'k-cph'].forEach(id => $(id).textContent = '-');
+    $('explain').hidden = true; $('count').textContent = ''; return;
+  }
+  const top = ranked.slice(0, 3);
+  tb.innerHTML = top.map((f, i) => `<tr class="${i === 0 ? 'top' : ''}"><td>${i + 1}</td><td>${esc(f.airline)}</td><td>$${f.price.toFixed(0)}</td><td>${stopsTxt(f.stops)}</td><td>${dur(f.minutes)}</td><td>$${f.perHour.toFixed(0)}</td><td>${f.ps.toFixed(0)}</td><td>${f.ts.toFixed(0)}</td><td>${f.ss.toFixed(0)}</td><td>${f.overall.toFixed(0)}/100</td></tr>`).join('');
+  $('count').textContent = `Showing the top ${top.length} of ${ranked.length} flights that match your budget and stops limit (${all.length} returned by the API).`;
+  const best = ranked[0];
+  const cheapest = ranked.reduce((a, b) => a.price <= b.price ? a : b);
+  const fastest = ranked.reduce((a, b) => a.minutes <= b.minutes ? a : b);
+  $('k-cheap').textContent = '$' + cheapest.price.toFixed(0);
+  $('k-fast').textContent = dur(fastest.minutes);
+  $('k-cph').textContent = '$' + (ranked.reduce((s, f) => s + f.perHour, 0) / ranked.length).toFixed(0) + '/hr';
+  const diff = best.price - cheapest.price, saved = cheapest.minutes - best.minutes;
+  $('explain').hidden = false;
+  $('explain').textContent = best === cheapest
+    ? `${best.airline} ranks first: it is the cheapest option and still scores well on time and stops.`
+    : `${best.airline} ranks first: it costs $${Math.abs(diff).toFixed(0)} ${diff >= 0 ? 'more' : 'less'} than the cheapest option (${cheapest.airline}) and ${saved >= 0 ? 'saves' : 'adds'} about ${dur(Math.abs(saved))} of travel time, with ${stopsTxt(best.stops).toLowerCase()}.`;
+}
+
+function setStatus(msg, cls) { const s = $('status'); s.textContent = msg; s.className = cls || ''; }
+
+function loadDemo(reason) {
+  lastData = buildDemo(); usingDemo = true; demoReason = reason;
+  $('req').textContent = 'No live call: showing a saved real response from the RapidAPI Run button (Flights Scraper Sky, flights/search-one-way, Paris to New Orleans).';
+  $('raw').textContent = JSON.stringify(lastData, null, 2);
+  setStatus('Showing saved demo data.', 'info');
+  render();
+}
+
+// Live search: uses the Netlify function (key stays on the server). If the person typed their own key, call RapidAPI directly instead.
+async function liveSearch(from, to, date) {
+  const key = $('key').value.trim();
+  let url, opts = {};
+  if (key) {
+    const qs = new URLSearchParams({ fromEntityId: from, toEntityId: to, departDate: date, adults: '1', currency: 'USD' });
+    url = `https://${DIRECT_HOST}/flights/search-one-way?${qs}`;
+    opts = { headers: { 'x-rapidapi-key': key, 'x-rapidapi-host': DIRECT_HOST } };
+  } else {
+    url = `/.netlify/functions/flights?${new URLSearchParams({ from, to, date })}`;
+  }
+  $('req').textContent = `GET ${url.split('?')[0]} (${from} to ${to}, ${date}, 1 adult, one-way)`;
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 300) }; }
+  $('raw').textContent = `HTTP ${res.status}\n\n` + JSON.stringify(json, null, 2).slice(0, 60000);
+  if (!res.ok) {
+    if (res.status === 404 && !key) throw new Error('the server function is not deployed');
+    throw new Error(`HTTP ${res.status}` + (res.status === 429 ? ' rate limit or quota reached' : (json.message ? ': ' + json.message : '')));
+  }
+  if (!normalize(json).length) throw new Error('no itineraries were returned');
+  return json;
+}
+
+$('w').addEventListener('input', () => { $('wv').textContent = $('w').value; render(); });
+$('budget').addEventListener('input', render);
+$('maxstops').addEventListener('change', render);
+$('sample').addEventListener('click', () => loadDemo('Showing saved demo data, not a live search.'));
+
+$('f').addEventListener('submit', async e => {
+  e.preventDefault();
+  const from = $('origin').value.trim().toUpperCase(), to = $('dest').value.trim().toUpperCase(), date = $('date').value;
+  setStatus('Searching...', 'info'); $('go').disabled = true;
+  try {
+    lastData = await liveSearch(from, to, date);
+    usingDemo = false; demoReason = '';
+    setStatus(`Live API OK: ${normalize(lastData).length} itineraries.`, 'ok');
+    render();
+  } catch (err) {
+    loadDemo(`Live data is unavailable (${err.message}), so saved demo data is shown instead.`);
+  } finally { $('go').disabled = false; }
+});
+</script>
+</body>
+</html>
