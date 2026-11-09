@@ -135,8 +135,20 @@ function buildDemo() {
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
+// The API's flight list is not always a plain array, so look for it in the likely places.
+function findItineraries(json) {
+  const d = json?.data ?? json;
+  const cands = [d?.itineraries, d?.itineraries?.results, d?.itineraries?.itineraries, d?.results, json?.itineraries, d];
+  for (const c of cands) if (Array.isArray(c)) return c;
+  const obj = d?.itineraries && typeof d.itineraries === 'object' ? d.itineraries : d;
+  if (obj && typeof obj === 'object') {
+    for (const v of Object.values(obj)) if (Array.isArray(v) && v.length && v[0]?.price) return v;
+  }
+  return [];
+}
+
 function normalize(json) {
-  const list = json?.data?.itineraries || json?.itineraries || [];
+  const list = findItineraries(json);
   return list.map(it => {
     const leg = it.legs?.[0] || {};
     return {
@@ -204,10 +216,12 @@ function render() {
 
 function setStatus(msg, cls) { const s = $('status'); s.textContent = msg; s.className = cls || ''; }
 
-function loadDemo(reason) {
+function loadDemo(reason, keepRaw) {
   lastData = buildDemo(); usingDemo = true; demoReason = reason;
-  $('req').textContent = 'No live call: showing a saved real response from the RapidAPI Run button (Flights Scraper Sky, flights/search-one-way, Paris to New Orleans).';
-  $('raw').textContent = JSON.stringify(lastData, null, 2);
+  if (!keepRaw) {
+    $('req').textContent = 'No live call: showing a saved real response from the RapidAPI Run button (Flights Scraper Sky, flights/search-one-way, Paris to New Orleans).';
+    $('raw').textContent = JSON.stringify(lastData, null, 2);
+  }
   setStatus('Showing saved demo data.', 'info');
   render();
 }
@@ -232,7 +246,10 @@ async function liveSearch(from, to, date) {
     if (res.status === 404 && !key) throw new Error('the server function is not deployed');
     throw new Error(`HTTP ${res.status}` + (res.status === 429 ? ' rate limit or quota reached' : (json.message ? ': ' + json.message : '')));
   }
-  if (!normalize(json).length) throw new Error('no itineraries were returned');
+  if (!normalize(json).length) {
+    const it = json?.data?.itineraries;
+    throw new Error('no flights found in the response (data keys: ' + Object.keys(json?.data || {}).join(', ') + '; itineraries is ' + (Array.isArray(it) ? 'an empty array' : typeof it) + ')');
+  }
   return json;
 }
 
@@ -251,7 +268,7 @@ $('f').addEventListener('submit', async e => {
     setStatus(`Live API OK: ${normalize(lastData).length} itineraries.`, 'ok');
     render();
   } catch (err) {
-    loadDemo(`Live data is unavailable (${err.message}), so saved demo data is shown instead.`);
+    loadDemo(`Live data is unavailable (${err.message}), so saved demo data is shown instead.`, true);
   } finally { $('go').disabled = false; }
 });
 </script>
